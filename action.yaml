@@ -1,0 +1,188 @@
+name: 'DCE Environment Setup and Login'
+description: 'Create or login to a DCE environment'
+
+inputs:
+  action-type:
+    description: 'Specify "provision" to create or login to a lease, or "decommission" to end a lease.'
+    required: false
+    default: 'provision'
+  aws-access-key-id:
+    description: 'AWS Access Key ID'
+    required: true
+    secrets: true
+  aws-secret-access-key:
+    description: 'AWS Secret Access Key'
+    required: true
+    secrets: true
+  budget-amount:
+    description: 'Budget amount for the lease'
+    required: false
+    default: '10'
+  budget-currency:
+    description: 'Currency for the budget amount'
+    required: false
+    default: 'USD'
+  email:
+    description: 'Email for notifications'
+    required: false
+  principal-id:
+    description: 'Unique identifier for the principal'
+    required: false
+  expiry:
+    description: 'How long to hold onto the lease'
+    required: false
+    default: '10m'
+  dce-host:
+    description: 'DCE API host'
+    required: false
+    default: 'playground.observe-blunderdome.com'
+  dce-region:
+    description: 'AWS region for DCE'
+    required: false
+    default: 'us-west-2'
+  dce-cli-version:
+    description: 'Version of the DCE CLI to use'
+    required: false
+    default: 'v0.5.0'
+  dce-cli-sha:
+    description: 'SHA256 checksum for the DCE CLI zip'
+    required: false
+    default: 'cb140c743373e28a6c1bd4ba3fe1b81a7431dd538e1ad430fede3c1aff4508db'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine Principal ID
+      id: set_principal
+      shell: bash
+      run: |
+        if [[ "${{ inputs.principal-id }}" == "" ]]; then
+          PRINCIPAL_ID="${{ github.repository }}-${{ github.run_id }}"
+        else
+          PRINCIPAL_ID="${{ inputs.principal-id }}"
+        fi
+        PRINCIPAL_ID="${PRINCIPAL_ID//\//-}"
+        echo "PRINCIPAL_ID=$PRINCIPAL_ID" >> $GITHUB_ENV
+
+    - name: Install DCE CLI
+      shell: bash
+      run: |
+        DCE_CLI_VERSION="${{ inputs.dce-cli-version }}"
+        DCE_CLI_SHA="${{ inputs.dce-cli-sha }}"
+        DCE_CLI_URL="https://github.com/Optum/dce-cli/releases/download/$DCE_CLI_VERSION/dce_linux_amd64.zip"
+
+        echo "Downloading dce-cli version $DCE_CLI_VERSION..."
+        wget -q $DCE_CLI_URL
+
+        echo "Validating checksum..."
+        echo "$DCE_CLI_SHA  dce_linux_amd64.zip" | sha256sum -c -
+
+        unzip dce_linux_amd64.zip -d dce_cli
+        sudo mv dce_cli/dce /usr/local/bin/dce
+        rm -rf dce_cli dce_linux_amd64.zip
+    
+    - name: Create DCE Configuration
+      shell: bash
+      run: |
+        mkdir -p ~/.dce
+        cat > ~/.dce/config.yaml << EOF
+        api:
+          host: ${{ inputs.dce-host }}
+          basepath: /
+        region: ${{ inputs.dce-region }}
+        EOF
+
+    - name: Setup AWS credentials (original)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.dce-region }}
+
+    - name: AWS Identity (original)
+      shell: bash
+      run: aws sts get-caller-identity
+
+    - name: Setup DCE and create credentials
+      shell: bash
+      run: |
+        ACTION_TYPE="${{ inputs.action-type }}"
+        BUDGET_AMOUNT="${{ inputs.budget-amount }}"
+        BUDGET_CURRENCY="${{ inputs.budget-currency }}"
+        EMAIL="${{ inputs.email }}"
+        EXPIRY="${{ inputs.expiry }}"
+
+        lease_id=$(dce leases list --status Active --principal-id $PRINCIPAL_ID | jq -r '.[0].id')
+        if [[ "$lease_id" == "null" ]]; then
+          echo "Creating a new lease..."
+          lease_id=$(dce leases create --budget-amount $BUDGET_AMOUNT --budget-currency $BUDGET_CURRENCY --email $EMAIL --principal-id $PRINCIPAL_ID -E $EXPIRY | jq -r '.id')
+          if [[ "$lease_id" == "null" ]]; then
+            echo "Failed to create a lease. Exiting."
+            exit 1
+          fi
+        fi
+
+        echo "Logging into lease $lease_id..."
+        # Execute the credentials script to set the AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN environment variables
+        eval $(dce leases login --print-creds $lease_id)
+
+        # Check if the credentials were set
+        if [[ -z "$AWS_ACCESS_KEY_ID" || -z "$AWS_SECRET_ACCESS_KEY" || -z "$AWS_SESSION_TOKEN" ]]; then
+          echo "Failed to get credentials. Exiting."
+          exit 1
+        fi
+
+        # Since the credentials are now environment variables, you can access them directly
+        access_key_id=$AWS_ACCESS_KEY_ID
+        secret_access_key=$AWS_SECRET_ACCESS_KEY
+        session_token=$AWS_SESSION_TOKEN
+
+        # Mask the credentials in the logs
+        echo "::add-mask::$access_key_id"
+        echo "::add-mask::$secret_access_key"
+        echo "::add-mask::$session_token"
+
+        # Output the credentials to GITHUB_ENV
+        echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID" >> $GITHUB_ENV
+        echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY" >> $GITHUB_ENV
+        echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN" >> $GITHUB_ENV
+
+    - name: Setup AWS credentials (DCE)
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+        aws-session-token: ${{ env.AWS_SESSION_TOKEN }}
+        aws-region: ${{ inputs.dce-region }}
+
+    - name: AWS Identity (DCE)
+      id: aws_identity
+      shell: bash
+      run: |
+        IDENTITY=$(aws sts get-caller-identity)
+        ACCOUNT_ID=$(echo $IDENTITY | jq -r .Account)
+        echo "ACCOUNT_ID=$ACCOUNT_ID" >> $GITHUB_ENV
+        echo $IDENTITY
+
+    - name: Setup AWS credentials to decomission (original)
+      if: ${{ inputs.action-type == 'decommission' }}
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.dce-region }}
+
+    - name: Decommission DCE environment
+      if: ${{ inputs.action-type == 'decommission' }}
+      shell: bash
+      run: |
+        # End the lease
+        echo "Ending lease for principal ID $PRINCIPAL_ID in account $ACCOUNT_ID..."
+        dce leases end -a $ACCOUNT_ID -p $PRINCIPAL_ID
+
+        if [ $? -ne 0 ]; then
+          echo "Failed to end the lease. Exiting."
+          exit 1
+        fi
+
+        echo "Lease ended successfully."
