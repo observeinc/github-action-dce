@@ -1,3 +1,3 @@
 provider "github" {
-  owner = local.organization
+  owner = var.organization
 }

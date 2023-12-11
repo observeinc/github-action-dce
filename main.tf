@@ -4,6 +4,6 @@ provider "aws" {
 
 module "github_aws_federation" {
   source = "./tf_github_aws_federation"
-  organization = "hutchic-observe-meta"
+  organization = "observeinc"
   repository   = "github-action-dce.git"
 }
