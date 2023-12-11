@@ -2,6 +2,12 @@
 
 This GitHub Action provisions or decommissions a Dynamic Cloud Environment (DCE) lease. It is designed to create an ephemeral AWS account with a specified budget and duration or to clean up the lease after use.
 
+## Terraform Module for AWS/GitHub Federation
+
+To facilitate the setup of AWS/GitHub federation for this GitHub Action, we have provided a dedicated Terraform module. This module simplifies the process of setting up the necessary AWS IAM roles and policies, and integrating them with GitHub Actions.
+
+For detailed information on how to use this module, including configuration options and usage examples, please refer to the module's [tf_github_aws_federation/README.md](README.md).
+
 ## Inputs
 
 - `action-type`: "provision" (default) to create/login or "decommission" to end a lease.
