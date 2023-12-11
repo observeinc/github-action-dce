@@ -7,45 +7,74 @@ name: Tests
   workflow_dispatch: null
 
 jobs:
-  permission_check:
+  permission_check_static:
     runs-on: ubuntu-latest
     outputs:
-      can-write: '${{ steps.check.outputs.can-write }}'
-    env:
-      AWS_ACCESS_KEY_ID: '${{ secrets.AWS_ACCESS_KEY_ID }}'
+      can-run-static: '${{ steps.check_static.outputs.can-run-static }}'
     steps:
-      - id: check
+      - id: check_static
         run: |
-          # If the AWS_ACCESS_KEY_ID secret is MIA we can't run tests
-          if [[ -z "$AWS_ACCESS_KEY_ID" ]]; then
-              echo "can-write=false" >> $GITHUB_OUTPUT
+          if [[ -z "${{ secrets.AWS_ACCESS_KEY_ID }}" ]]; then
+              echo "can-run-static=false" >> $GITHUB_OUTPUT
           else
-              echo "can-write=true" >> $GITHUB_OUTPUT
+              echo "can-run-static=true" >> $GITHUB_OUTPUT
           fi
-          
-  test-action:
+
+  permission_check_federated:
+    runs-on: ubuntu-latest
+    outputs:
+      can-run-federated: '${{ steps.check_federated.outputs.can-run-federated }}'
+    steps:
+      - id: check_federated
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_ARN }}" ]]; then
+              echo "can-run-federated=false" >> $GITHUB_OUTPUT
+          else
+              echo "can-run-federated=true" >> $GITHUB_OUTPUT
+          fi
+
+  test-action-static:
     runs-on: ubuntu-latest
     needs:
-      - permission_check
-    if: needs.permission_check.outputs.can-write == 'true'
+      - permission_check_static
+    if: needs.permission_check_static.outputs.can-run-static == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Provision DCE
+      - name: Provision DCE (Static)
         uses: ./
         with:
           aws-access-key-id: '${{ secrets.AWS_ACCESS_KEY_ID }}'
           aws-secret-access-key: '${{ secrets.AWS_SECRET_ACCESS_KEY }}'
           email: colin.hutchinson+gha@observeinc.com
-
-      - name: AWS Identity (DCE)
+      - name: AWS Identity (DCE Static)
         run: aws sts get-caller-identity
-
-      - name: Decomission DCE
+      - name: Decommission DCE (Static)
         uses: ./
         with:
           action-type: decommission
           aws-access-key-id: '${{ secrets.AWS_ACCESS_KEY_ID }}'
           aws-secret-access-key: '${{ secrets.AWS_SECRET_ACCESS_KEY }}'
+          email: colin.hutchinson+gha@observeinc.com
+
+  test-action-federated:
+    runs-on: ubuntu-latest
+    needs:
+      - permission_check_federated
+    if: needs.permission_check_federated.outputs.can-run-federated == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Provision DCE (Federated)
+        uses: ./
+        with:
+          aws-role-arn: '${{ secrets.AWS_ROLE_ARN }}'
+          email: colin.hutchinson+gha@observeinc.com
+      - name: AWS Identity (DCE Federated)
+        run: aws sts get-caller-identity
+      - name: Decommission DCE (Federated)
+        uses: ./
+        with:
+          action-type: decommission
+          aws-role-arn: '${{ secrets.AWS_ROLE_ARN }}'
           email: colin.hutchinson+gha@observeinc.com
