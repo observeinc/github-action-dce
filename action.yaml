@@ -14,6 +14,10 @@ inputs:
     description: 'AWS Secret Access Key'
     required: true
     secrets: true
+  aws-role-arn:
+    description: 'AWS Role ARN for federated access (optional)'
+    required: false
+    secrets: true
   budget-amount:
     description: 'Budget amount for the lease'
     required: false
@@ -92,11 +96,18 @@ runs:
         region: ${{ inputs.dce-region }}
         EOF
 
-    - name: Setup AWS credentials (original)
+    - name: Setup AWS credentials (original static)
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.dce-region }}
+
+    - name: Setup AWS Credentials (original federation)
+      if: inputs.aws-role-arn != ''
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
         aws-region: ${{ inputs.dce-region }}
 
     - name: AWS Identity (original)
