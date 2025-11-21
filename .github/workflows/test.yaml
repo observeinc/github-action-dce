@@ -30,7 +30,7 @@ jobs:
     if: needs.permission_check.outputs.can-write == 'true'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Provision DCE
         uses: ./
